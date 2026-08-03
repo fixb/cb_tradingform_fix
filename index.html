@@ -628,6 +628,35 @@ function applyPricer(j){
     if(tk.proceeds_pct_par!=null)sc("cbpx-event",f(tk.proceeds_pct_par,0));
     if(tk.pnl_pct!=null)sc("plOut-event",f(tk.pnl_pct,1)+"%");
   }
+  // ── What-if scenarios (cb_pricer v1.2, outputs.scenarios) → Risk/Reward grid
+  //    Base = no shock · Bear = "Risk-off sell-off" · Bull = "Melt-up rally".
+  //    Event column stays driven by the takeover block above. Missing block → skipped (old exports).
+  const scen=o.scenarios;
+  if(scen&&Array.isArray(scen.grid)){
+    const baseCb=scen.base_cb!=null?scen.base_cb:cb;
+    const parityBase=an.parity!=null?an.parity:ref.parity;
+    const deltaFrac=an.delta_pct!=null?an.delta_pct/100:null;
+    const byName={};scen.grid.forEach(g=>{if(g&&g.name)byName[g.name]=g;});
+    const sgn=(v,d,u)=>v==null||!isFinite(v)?"":(v>0?"+":"")+(+v).toFixed(d)+u;
+    const cols=[
+      ["base",{shock:{equity_pct:0,credit_bps:0,vol_pts:0,rate_bps:0},cb_pct_par:an.cb_pct_par,deltaVsBase_pct:0,deltaVsBase_usd:0,parity:parityBase}],
+      ["bear",byName["Risk-off sell-off"]],
+      ["bull",byName["Melt-up rally"]]
+    ];
+    cols.forEach(([c,g])=>{
+      if(!g)return;
+      const sh=g.shock||{};
+      sc("equity-"+c,sgn(sh.equity_pct,1,"%"));
+      sc("spread-"+c,sgn(sh.credit_bps,0,"bp"));
+      sc("ivolSc-"+c,sgn(sh.vol_pts,1,"pt"));
+      sc("cbpx-"+c,f(g.cb_pct_par,1));
+      sc("plOut-"+c,sgn(g.deltaVsBase_pct,1,"%"));
+      if(deltaFrac!=null&&parityBase!=null&&g.parity!=null&&g.deltaVsBase_usd!=null){
+        const hUsd=g.deltaVsBase_usd-deltaFrac*(g.parity-parityBase); // delta-hedged repricing P&L (instantaneous, carry≈0)
+        sc("plHdg-"+c,baseCb?sgn(hUsd/baseCb*100,1,"%"):"");
+      }
+    });
+  }
   if(j.charts&&(j.charts.priceDecomposition||j.charts.greeks||j.charts.takeover))pricerCharts=j.charts;
   render();
   flash(filled+" fields loaded from cb_pricer — "+(m.isin||m.name||""));
