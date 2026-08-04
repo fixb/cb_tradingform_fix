@@ -97,6 +97,9 @@ input[type=file]::file-selector-button:hover{border-color:var(--amber);color:var
   .doc .empty{color:#bbb}
   .doc .rc-rich{color:#b23b3b!important;-webkit-print-color-adjust:exact;print-color-adjust:exact}
   .doc .rc-cheap{color:#2f8f5b!important;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  .doc h3.page-break{break-before:page;page-break-before:always}
+  .doc h3,.doc h4{break-after:avoid;page-break-after:avoid}
+  .doc table,.doc .reco{break-inside:avoid;page-break-inside:avoid}
   .doc svg{background:#fff!important;border-color:#ddd!important}
   .doc img{border-color:#ddd!important}
   svg .gl{stroke:#e8e8e8!important}
@@ -397,7 +400,7 @@ function render(){
   ${cats.length?cats.map(c=>`<tr><td>${esc(c.name)}</td><td>${dash(c.time)}</td><td>${dash(c.dir)}</td><td>${dash(c.imp)}</td></tr>`).join(""):'<tr><td colspan="4" class="empty">—</td></tr>'}</table>
   ${kv([["Ratchet value in CoC",K.ratchet],["Prob-weighted event premium",K.evPrem]])}
 
-  <h3>4 · Risk / reward — scenarios</h3>
+  <h3 class="page-break">4 · Risk / reward — scenarios</h3>
   <table><tr><th></th><th>Bear</th><th>Base</th><th>Bull</th><th>Event (CoC)</th></tr>
   ${SC_ROWS.map(([k,l])=>`<tr><td class="k">${l}</td>${SC_COLS.map(c=>`<td>${dash(s.sc[k+"-"+c])}</td>`).join("")}</tr>`).join("")}</table>
   <h4>Risk metrics</h4>
