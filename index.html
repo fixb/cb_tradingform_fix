@@ -386,7 +386,7 @@ function render(){
   ${coneBlock(K)}
   ${pricerBlock()}
 
-  <h3>2 · Corporate analysis</h3>
+  <h3 class="page-break">2 · Corporate analysis</h3>
   <h4>Business</h4>${para(K.business)}
   <h4>Credit</h4>
   ${kv([["Leverage gross / net",K.lev],["FCF",K.fcf],["Liquidity",K.liq],["Ratings / outlook",K.ratings],["Refi wall",K.refi],["CB rank in cap structure",K.rank]])}
@@ -395,7 +395,7 @@ function render(){
   ${kv([["Valuation",K.eqVal],["Short interest",K.si],["Buyback / dividend",K.bb]])}
   ${para(K.eqStory)}
 
-  <h3>3 · Catalysts</h3>
+  <h3 class="page-break">3 · Catalysts</h3>
   <table><tr><th>Catalyst</th><th>Timing</th><th>Direction</th><th>Impact on CB</th></tr>
   ${cats.length?cats.map(c=>`<tr><td>${esc(c.name)}</td><td>${dash(c.time)}</td><td>${dash(c.dir)}</td><td>${dash(c.imp)}</td></tr>`).join(""):'<tr><td colspan="4" class="empty">—</td></tr>'}</table>
   ${kv([["Ratchet value in CoC",K.ratchet],["Prob-weighted event premium",K.evPrem]])}
