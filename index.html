@@ -79,6 +79,8 @@ input[type=file]::file-selector-button:hover{border-color:var(--amber);color:var
 .doc td.k{color:var(--muted);width:38%}
 .doc p{margin:4px 0 8px;white-space:pre-wrap}
 .doc .empty{color:#4c525c}
+.doc .rc-rich{color:var(--red);font-weight:600}
+.doc .rc-cheap{color:var(--green);font-weight:600}
 .doc .reco{margin-top:22px;padding:12px 16px;border:1px solid var(--amber);border-radius:6px;font-family:'IBM Plex Mono',monospace;font-size:12.5px}
 .doc .reco b{color:var(--amber2)}
 
@@ -93,6 +95,8 @@ input[type=file]::file-selector-button:hover{border-color:var(--amber);color:var
   .doc td{color:#111;border-color:#ddd}.doc td.k,.doc th{color:#666}
   .doc .reco{border-color:#8a5a10}.doc .reco b{color:#8a5a10}
   .doc .empty{color:#bbb}
+  .doc .rc-rich{color:#b23b3b!important;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  .doc .rc-cheap{color:#2f8f5b!important;-webkit-print-color-adjust:exact;print-color-adjust:exact}
   .doc svg{background:#fff!important;border-color:#ddd!important}
   .doc img{border-color:#ddd!important}
   svg .gl{stroke:#e8e8e8!important}
@@ -186,7 +190,7 @@ input[type=file]::file-selector-button:hover{border-color:var(--amber);color:var
   </div>
   <div class="grid2">
     <div class="field"><label>Credit assumption (spread, basis)</label><input type="text" data-k="spread"></div>
-    <div class="field"><label>Rich / cheap vs fair value</label><input type="text" data-k="richCheap"></div>
+    <div class="field"><label>Rich (+) / cheap (−) vs fair value</label><input type="text" data-k="richCheap" placeholder="+ = rich / expensive (red) · − = cheap (green), e.g. −1.3 pts vs theo"></div>
   </div>
   <div class="subhead">1.2b Pricing comparison — theo by source (same params)</div>
   <div class="grid3">
@@ -343,7 +347,16 @@ function collect(){
 }
 
 /* ---------- preview render ---------- */
-function kv(rows){return `<table>${rows.map(([k,v])=>`<tr><td class="k">${k}</td><td>${dash(v)}</td></tr>`).join("")}</table>`;}
+function kv(rows){return `<table>${rows.map(([k,v,raw])=>`<tr><td class="k">${k}</td><td>${raw?v:dash(v)}</td></tr>`).join("")}</table>`;}
+function rcCell(v){
+  if(!v||!v.trim())return '<span class="empty">—</span>';
+  const t=v.trim();let cls="";
+  if(/^\+/.test(t))cls="rc-rich";
+  else if(/^[-−]/.test(t))cls="rc-cheap";
+  else if(/\b(rich|expensive|dear)\b/i.test(t))cls="rc-rich";
+  else if(/\bcheap\b/i.test(t))cls="rc-cheap";
+  return cls?`<span class="${cls}">${esc(t)}</span>`:esc(t);
+}
 function para(v){return v&&v.trim()?`<p>${esc(v)}</p>`:'<p class="empty">—</p>';}
 
 function render(){
@@ -362,7 +375,7 @@ function render(){
   <h4>Terms</h4>
   ${kv([["Issue size / outstanding",K.issueSize],["Coupon / frequency",K.coupon],["Maturity / avg life",K.maturity],["Conversion price / ratio",K.convPrice],["Premium at issue",K.premIssue],["Soft call",K.softCall],["Investor put",K.put],["Dividend protection",K.divProt],["Takeover protection",K.coc],["Settlement",K.settle]])}
   <h4>Valuation & Greeks</h4>
-  ${kv([["Price / parity / conv premium",[K.px,K.parity,K.convPrem].filter(x=>x&&x.trim()).join(" / ")],["Bond floor / inv premium / YTM-YTP",[K.floor,K.invPrem,K.ytm].filter(x=>x&&x.trim()).join(" / ")],["Delta / gamma / vega / theta",[K.delta,K.gamma,K.vega,K.theta].filter(x=>x&&x.trim()).join(" / ")],["Implied vs realized/listed vol",[K.ivol,K.rvol].filter(x=>x&&x.trim()).join(" vs ")],["Credit assumption",K.spread],["Rich / cheap vs fair value",K.richCheap]])}
+  ${kv([["Price / parity / conv premium",[K.px,K.parity,K.convPrem].filter(x=>x&&x.trim()).join(" / ")],["Bond floor / inv premium / YTM-YTP",[K.floor,K.invPrem,K.ytm].filter(x=>x&&x.trim()).join(" / ")],["Delta / gamma / vega / theta",[K.delta,K.gamma,K.vega,K.theta].filter(x=>x&&x.trim()).join(" / ")],["Implied vs realized/listed vol",[K.ivol,K.rvol].filter(x=>x&&x.trim()).join(" vs ")],["Credit assumption",K.spread],["Rich (+) / cheap (−) vs fair value",rcCell(K.richCheap),true]])}
   ${priceCompare(K)}
   <h4>Technicals</h4>
   ${kv([["Borrow",K.borrow],["Holder base",K.holders]])}
