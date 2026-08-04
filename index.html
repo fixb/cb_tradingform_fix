@@ -115,7 +115,7 @@ input[type=file]::file-selector-button:hover{border-color:var(--amber);color:var
     <button onclick="loadDraft()">Load draft</button>
     <button onclick="saveDraft()">Save draft</button>
     <button onclick="copyMD()">Copy Markdown</button>
-    <button class="primary" onclick="window.print()">Print / PDF</button>
+    <button class="primary" onclick="printForm()">Print / PDF</button>
   </div>
   <input type="file" id="fileIn" accept=".json" style="display:none">
 </header>
@@ -301,6 +301,37 @@ function addCat(v={}){
   d.querySelectorAll("input").forEach(i=>i.addEventListener("input",render));
 }
 addCat();
+
+/* ---------- PRINT / PDF filename ---------- */
+function sanitizeFilePart(s){
+  // strip characters illegal in filenames, collapse whitespace
+  return String(s||"").replace(/[\\/:*?"<>|]+/g," ").replace(/\s+/g," ").trim();
+}
+function extractMaturity(raw){
+  const t=String(raw||"");
+  // prefer a full date like 2029-06-15 / 2029/06/15 -> 20290615
+  let m=t.match(/(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/);
+  if(m)return m[1]+m[2].padStart(2,"0")+m[3].padStart(2,"0");
+  // else a plain year like 2029
+  m=t.match(/\b(19|20)\d{2}\b/);
+  if(m)return m[0];
+  // else fall back to the cleaned free text
+  return sanitizeFilePart(t);
+}
+function printForm(){
+  const q=k=>{const el=document.querySelector('[data-k="'+k+'"]');return el?el.value:"";};
+  const now=new Date();
+  const p=n=>String(n).padStart(2,"0");
+  const stamp=""+now.getFullYear()+p(now.getMonth()+1)+p(now.getDate())+"_"+p(now.getHours())+p(now.getMinutes());
+  const issuer=sanitizeFilePart(q("issuer"))||"Issuer";
+  const maturity=extractMaturity(q("maturity"));
+  const name=[stamp,issuer+(maturity?" "+maturity:"")].join("_");
+  const prev=document.title;
+  document.title=name;
+  window.print();
+  // restore after the print dialog releases the thread
+  setTimeout(()=>{document.title=prev;},1000);
+}
 
 function collect(){
   const s={k:{},sc:{},tt:[],cats:[]};
