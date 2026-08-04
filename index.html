@@ -212,7 +212,7 @@ input[type=file]::file-selector-button:hover{border-color:var(--amber);color:var
   <div class="field"><label>Flows / supply / issuer repurchases</label><textarea data-k="flows"></textarea></div>
   <div class="subhead">1.4 Vol cone</div>
   <div class="grid2">
-    <div class="field"><label>From Excel (Cone sheet: Horizon / P10…P90)</label><input type="file" id="coneXlsx" accept=".xlsx,.xls"></div>
+    <div class="field"><label>From Excel (Cone sheet: Horizon / P10…P90 · Top Moves read if present)</label><input type="file" id="coneXlsx" accept=".xlsx,.xls"></div>
     <div class="field"><label>Or image (png / jpg)</label><input type="file" id="coneImg" accept="image/*"></div>
   </div>
   <div class="field"><label>Comment — positioning of implied vs cone</label><input type="text" data-k="coneNote" placeholder="IV 33 vs P50 41 on 60j → screens cheap vs realized"></div>
@@ -432,7 +432,7 @@ $("#coneXlsx").addEventListener("change",e=>{
   const r=new FileReader();
   r.onload=()=>{
     try{
-      const wb=XLSX.read(new Uint8Array(r.result),{type:"array"});
+      const wb=XLSX.read(new Uint8Array(r.result),{type:"array",cellDates:true});
       let rows=null;
       for(const n of wb.SheetNames){
         const js=XLSX.utils.sheet_to_json(wb.Sheets[n],{header:1});
@@ -452,6 +452,30 @@ $("#coneXlsx").addEventListener("change",e=>{
         d.current.push(iCur>=0&&rw[iCur]!=null?+rw[iCur]:null);
         d.rank.push(iRank>=0&&rw[iRank]!=null?+rw[iRank]:null);
       });
+      // Optional "Top Moves" sheet (biggest day/day realized-vol swings)
+      const tmName=wb.SheetNames.find(n=>/top ?moves/i.test(n));
+      if(tmName){
+        const tj=XLSX.utils.sheet_to_json(wb.Sheets[tmName],{header:1});
+        const th=(tj[0]||[]).map(String);
+        const ci={
+          win:th.findIndex(h=>/fen|window|horizon/i.test(h)),
+          dir:th.findIndex(h=>/direction|sens/i.test(h)),
+          rank:th.findIndex(h=>/rang|rank/i.test(h)),
+          date:th.findIndex(h=>/date/i.test(h)),
+          dpts:th.findIndex(h=>/pts|Δ|delta/i.test(h)),
+          vol:th.findIndex(h=>/vol/i.test(h))
+        };
+        if(ci.win>=0&&ci.dir>=0&&ci.date>=0&&ci.dpts>=0){
+          d.topMoves=tj.slice(1).filter(rw=>rw&&rw[ci.win]!=null&&rw[ci.dpts]!=null).map(rw=>({
+            win:String(rw[ci.win]),
+            dir:String(rw[ci.dir]),
+            rank:ci.rank>=0&&rw[ci.rank]!=null?+rw[ci.rank]:null,
+            date:xlDate(rw[ci.date]),
+            dpts:+rw[ci.dpts],
+            vol:ci.vol>=0&&rw[ci.vol]!=null?+rw[ci.vol]:null
+          }));
+        }
+      }
       volCone={type:"data",data:d};
       $("#coneImg").value="";
       render();flash("Vol cone loaded from Excel");
@@ -507,12 +531,41 @@ function rankTable(d){
   return t+"</table>";
 }
 
+function xlDate(v){
+  let dt=null;
+  if(v instanceof Date)dt=v;
+  else if(typeof v==="number")dt=new Date(Math.round((v-25569)*86400*1000));
+  if(!dt||isNaN(dt.getTime()))return String(v??"—");
+  return dt.toLocaleDateString("fr-FR",{day:"2-digit",month:"short",year:"numeric"});
+}
+
+// Biggest day/day realized-vol swings — shortest window (most reactive), matching the cone tool
+function movesTable(d){
+  const m=d.topMoves;
+  if(!m||!m.length)return "";
+  const wins=[...new Set(m.map(x=>x.win))].sort((a,b)=>parseInt(a)-parseInt(b));
+  const w=wins[0];
+  const pick=re=>m.filter(x=>x.win===w&&re.test(x.dir)).sort((a,b)=>(a.rank||0)-(b.rank||0));
+  const up=pick(/hausse|rise|up/i),down=pick(/baisse|fall|down/i);
+  if(!up.length&&!down.length)return "";
+  const col=(rows,cls,lbl)=>`<table><tr><th colspan="3" class="${cls}" style="text-transform:none">${lbl}</th></tr>`
+    +`<tr><th>Date</th><th style="text-align:right">Δ pts</th><th style="text-align:right">Vol</th></tr>`
+    +rows.map(x=>`<tr><td class="k">${esc(x.date)}</td>`
+      +`<td class="${cls}" style="text-align:right">${x.dpts>=0?"+":""}${x.dpts.toFixed(2)}</td>`
+      +`<td style="text-align:right">${x.vol!=null?x.vol.toFixed(1)+"%":"—"}</td></tr>`).join("")
+    +`</table>`;
+  return `<p style="color:var(--muted);font-size:11px;margin:10px 0 2px">Biggest day/day vol moves · ${esc(w)} window</p>`
+    +`<div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">`
+    +col(up,"rc-cheap","▲ Rises · vol gained")
+    +col(down,"rc-rich","▼ Falls · vol lost")+`</div>`;
+}
+
 function coneBlock(K){
   const note=(K.coneNote||"").trim();
   if(!volCone&&!note)return "";
   let inner="";
   if(volCone)inner=volCone.type==="data"
-    ?coneSVG(volCone.data)+rankTable(volCone.data)
+    ?coneSVG(volCone.data)+rankTable(volCone.data)+movesTable(volCone.data)
     :`<img src="${volCone.dataUrl}" alt="Vol cone" style="width:100%;border:1px solid var(--line);border-radius:6px">`;
   return `<h4>Vol cone</h4>${inner}${note?`<p>${esc(note)}</p>`:""}`;
 }
@@ -527,6 +580,19 @@ function coneMD(K){
     d.horizons.forEach((h,i)=>{
       md+=`| ${h} | ${keys.map(k=>d.series[k][i].toFixed(1)+"%").join(" | ")} | ${d.current[i]!=null?d.current[i].toFixed(1)+"%":"—"} | ${d.rank[i]!=null?d.rank[i].toFixed(0)+"%":"—"} |\n`;
     });
+    if(d.topMoves&&d.topMoves.length){
+      const wins=[...new Set(d.topMoves.map(x=>x.win))].sort((a,b)=>parseInt(a)-parseInt(b)),w=wins[0];
+      const pick=re=>d.topMoves.filter(x=>x.win===w&&re.test(x.dir)).sort((a,b)=>(a.rank||0)-(b.rank||0));
+      const up=pick(/hausse|rise|up/i),down=pick(/baisse|fall|down/i);
+      if(up.length||down.length){
+        md+=`\n**Biggest day/day vol moves — ${w} window**\n\n| Rank | Rise date | Δ pts | Fall date | Δ pts |\n|---|---|---|---|---|\n`;
+        const rows=Math.max(up.length,down.length);
+        for(let i=0;i<rows;i++){
+          const u=up[i],dn=down[i];
+          md+=`| ${i+1} | ${u?u.date:"—"} | ${u?(u.dpts>=0?"+":"")+u.dpts.toFixed(2):"—"} | ${dn?dn.date:"—"} | ${dn?(dn.dpts>=0?"+":"")+dn.dpts.toFixed(2):"—"} |\n`;
+        }
+      }
+    }
   }else if(volCone){md+="(vol cone chart attached as image)\n";}
   if(note)md+=note+"\n";
   return md;
