@@ -220,6 +220,12 @@ input[type=file]::file-selector-button:hover{border-color:var(--amber);color:var
 </div></details>
 
 <details class="sec"><summary>2 · Corporate</summary><div class="body">
+  <div class="subhead">2.0 Load data (Bloomberg)</div>
+  <div class="grid2">
+    <div class="field"><label>Sell-side target prices (ANR export · xlsx/xlsm)</label><input type="file" id="anrFile" accept=".xlsx,.xlsm,.xls"></div>
+    <div class="field"><label>Quarterly financials (FA export · xlsx)</label><input type="file" id="faFile" accept=".xlsx,.xlsm,.xls"></div>
+  </div>
+  <div class="field"><label>&nbsp;</label><button onclick="clearBloomberg()">Clear Bloomberg data</button></div>
   <div class="field"><label>2.1 Business — model, segments, cycle position</label><textarea data-k="business"></textarea></div>
   <div class="subhead">2.2 Credit</div>
   <div class="grid3">
@@ -237,6 +243,7 @@ input[type=file]::file-selector-button:hover{border-color:var(--amber);color:var
     <div class="field"><label>Short interest</label><input type="text" data-k="si"></div>
     <div class="field"><label>Buyback / dividend</label><input type="text" data-k="bb"></div>
   </div>
+  <div class="field"><label>Sell-side consensus (target / rating)</label><input type="text" data-k="sellSide" placeholder="loaded from ANR export"></div>
   <div class="field"><label>Equity story — what moves the stock</label><textarea data-k="eqStory"></textarea></div>
 </div></details>
 
@@ -346,6 +353,8 @@ function collect(){
   $$(".catrow").forEach(r=>s.cats.push({name:r.querySelector(".c-name").value,time:r.querySelector(".c-time").value,dir:r.querySelector(".c-dir").value,imp:r.querySelector(".c-imp").value}));
   s.volCone=volCone;
   s.pricerCharts=pricerCharts;
+  s.anrData=anrData;
+  s.faData=faData;
   return s;
 }
 
@@ -392,8 +401,10 @@ function render(){
   ${kv([["Leverage gross / net",K.lev],["FCF",K.fcf],["Liquidity",K.liq],["Ratings / outlook",K.ratings],["Refi wall",K.refi],["CB rank in cap structure",K.rank]])}
   ${para(K.creditView)}
   <h4>Equity</h4>
-  ${kv([["Valuation",K.eqVal],["Short interest",K.si],["Buyback / dividend",K.bb]])}
+  ${kv([["Valuation",K.eqVal],["Short interest",K.si],["Buyback / dividend",K.bb],["Sell-side consensus",K.sellSide]])}
   ${para(K.eqStory)}
+  ${finBlock()}
+  ${anrBlock()}
 
   <h3 class="page-break">3 · Catalysts</h3>
   <table><tr><th>Catalyst</th><th>Timing</th><th>Direction</th><th>Impact on CB</th></tr>
@@ -745,6 +756,296 @@ function priceCompareMD(K){
   return md;
 }
 
+/* ================= Bloomberg corporate loaders (ANR + FA) ================= */
+let anrData=null, faData=null;
+
+const bnum=v=>{
+  if(v==null||v==="")return null;
+  if(typeof v==="number")return isFinite(v)?(Math.abs(v)<1e-6?0:v):null;
+  const n=parseFloat(String(v).replace(/[, %$]/g,""));
+  return isFinite(n)?n:null;
+};
+const biso=v=>{
+  // SheetJS shifts pure dates by the local tz; round to nearest local midnight
+  if(v instanceof Date){const t=v.getTime()-v.getTimezoneOffset()*6e4;return new Date(Math.round(t/864e5)*864e5).toISOString().slice(0,10);}
+  if(v==null||v==="")return "";
+  return String(v).trim();
+};
+const bmoney=v=>v==null?"—":(Math.abs(v)>=10?v.toLocaleString("en-US",{maximumFractionDigits:0}):v.toFixed(1));
+const bpct=(v,sign)=>v==null?"—":((sign&&v>0?"+":"")+v.toFixed(1)+"%");
+
+function sheetRows(wb){
+  // return [{name, rows}] with rows = array-of-arrays, dates preserved
+  return wb.SheetNames.map(n=>({name:n,rows:XLSX.utils.sheet_to_json(wb.Sheets[n],{header:1,raw:true})}));
+}
+
+/* ---- ANR : sell-side target prices ---- */
+function parseANR(wb){
+  let head=-1,rows=null,iFirm,iAn,iReco,iTP,iDate;
+  for(const s of sheetRows(wb)){
+    const hi=s.rows.findIndex(r=>r&&r.some(c=>/firm name/i.test(String(c)))&&r.some(c=>/recommendation/i.test(String(c)))&&r.some(c=>/target price/i.test(String(c))));
+    if(hi>=0){
+      const H=s.rows[hi].map(String);
+      iFirm=H.findIndex(h=>/firm name/i.test(h));
+      iAn=H.findIndex(h=>/^analyst$/i.test(h));
+      iReco=H.findIndex(h=>/recommendation/i.test(h));
+      iTP=H.findIndex(h=>/target price/i.test(h));
+      iDate=H.findIndex(h=>/^date$/i.test(h));
+      rows=s.rows;head=hi;break;
+    }
+  }
+  if(!rows){flash("No ANR analyst table found in this file");return;}
+
+  // analyst rows
+  const analysts=[];
+  for(let i=head+1;i<rows.length;i++){
+    const r=rows[i];if(!r)continue;
+    const firm=r[iFirm];if(firm==null||String(firm).trim()==="")break;
+    const tp=bnum(r[iTP]);
+    analysts.push({firm:String(firm).trim(),analyst:iAn>=0?String(r[iAn]||"").trim():"",reco:iReco>=0?String(r[iReco]||"").trim():"",tp:tp&&tp>0?tp:null,date:iDate>=0?biso(r[iDate]):""});
+  }
+
+  // summary key/value block above the header
+  const sum={};
+  const LAB=[["buysPct",/^buys?\s*%$/i,1],["holdsPct",/^holds?\s*%$/i,1],["sellsPct",/^sells?\s*%$/i,1],
+    ["totalBuys",/^total buys?$/i,0],["totalHolds",/^total holds?$/i,0],["totalSells",/^total sells?$/i,0],
+    ["rating",/^rating$/i,0],["tpMean",/^target price$/i,0],["lastPrice",/^last price$/i,0],
+    ["returnPot",/^return potential$/i,1],["ltmReturn",/^ltm return$/i,1],["ccy",/^currency$/i,-1],
+    ["ticker",/^ticker$/i,-1],["asOf",/^as of date:?$/i,-2]];
+  for(let i=0;i<head;i++){
+    const r=rows[i];if(!r)continue;
+    r.forEach((c,ci)=>{
+      if(c==null)return;const t=String(c).trim();
+      LAB.forEach(([k,re,kind])=>{
+        if(sum[k]!=null||!re.test(t))return;
+        // next non-empty cell to the right
+        let v=null;for(let j=ci+1;j<r.length;j++){if(r[j]!=null&&r[j]!==""){v=r[j];break;}}
+        if(v==null)return;
+        sum[k]=kind<=-1?(kind===-2?biso(v):String(v).trim()):bnum(v);
+      });
+    });
+  }
+
+  // historical consensus series (Dates / Target Price / Last Price / Buy% ...)
+  let hist=[];
+  for(let i=0;i<rows.length;i++){
+    const r=rows[i];if(!r)continue;
+    const di=r.findIndex(c=>/^dates$/i.test(String(c)));
+    if(di<0)continue;
+    const H=r.map(String);
+    const cTP=H.findIndex((h,k)=>k>di&&/target price/i.test(h));
+    const cLast=H.findIndex((h,k)=>k>di&&/last price/i.test(h));
+    if(cTP<0||cLast<0)continue;
+    const cBuy=H.findIndex((h,k)=>k>di&&/buy\s*%/i.test(h));
+    const cHold=H.findIndex((h,k)=>k>di&&/hold\s*%/i.test(h));
+    const cSell=H.findIndex((h,k)=>k>di&&/sell\s*%/i.test(h));
+    for(let j=i+1;j<rows.length;j++){
+      const rr=rows[j];if(!rr||rr[di]==null||rr[di]==="")continue;
+      const d=biso(rr[di]);if(!/^\d{4}-\d\d-\d\d/.test(d))continue;
+      hist.push({date:d,tp:bnum(rr[cTP]),last:bnum(rr[cLast]),
+        buy:cBuy>=0?bnum(rr[cBuy]):null,hold:cHold>=0?bnum(rr[cHold]):null,sell:cSell>=0?bnum(rr[cSell]):null});
+    }
+    break;
+  }
+
+  anrData={sum,analysts,hist};
+  applyANR();render();
+  flash(analysts.length+" analysts loaded from ANR"+(sum.ticker?" — "+sum.ticker:""));
+}
+
+function applyANR(){
+  if(!anrData)return;
+  const s=anrData.sum||{};
+  const set=(k,v,onlyEmpty)=>{const el=document.querySelector(`[data-k="${k}"]`);if(el&&v&&(!onlyEmpty||!el.value.trim()))el.value=v;};
+  // pre-fill ticker/issuer only if still empty
+  if(s.ticker){const tk=String(s.ticker).split(/\s+/)[0];set("ticker",tk,true);}
+  const cur=s.ccy==="USD"?"$":(s.ccy?s.ccy+" ":"");
+  const parts=[];
+  if(s.tpMean!=null)parts.push("TP "+cur+s.tpMean.toFixed(0)+(s.lastPrice!=null?" vs "+cur+s.lastPrice.toFixed(0):"")+(s.returnPot!=null?" ("+bpct(s.returnPot*100,true)+")":""));
+  const nb=s.totalBuys,nh=s.totalHolds,nse=s.totalSells;
+  if(nb!=null||nh!=null||nse!=null)parts.push((nb||0)+"B / "+(nh||0)+"H / "+(nse||0)+"S");
+  if(s.rating!=null)parts.push("rating "+s.rating.toFixed(1)+"/5");
+  parts.push(anrData.analysts.length+" analysts");
+  set("sellSide",parts.join(" · "));
+}
+
+/* ---- FA : quarterly financials ---- */
+const FA_METRICS=[
+  ["revenue",/^revenue/i],["grossProfit",/^gross profit/i],["ebitda",/^ebitda/i],
+  ["netIncome",/^net income/i],["eps",/^eps\b/i],["mktCap",/market cap/i],
+  ["cash",/cash & equiv|cash and equiv/i],["debt",/total debt/i],["ev",/enterprise value/i],
+  ["cfo",/cash from oper/i],["capex",/capital expend/i],["fcf",/free cash flow/i]];
+
+function parseFA(wb){
+  let rows=null,qHead=-1,qcols=null;
+  for(const s of sheetRows(wb)){
+    for(let i=0;i<s.rows.length;i++){
+      const r=s.rows[i];if(!r)continue;
+      const cols=r.map((c,ci)=>/^Q[1-4]\s*'?\d{2,4}/i.test(String(c||"").trim())?ci:-1).filter(ci=>ci>=0);
+      if(cols.length>=3){qHead=i;qcols=cols;rows=s.rows;break;}
+    }
+    if(rows)break;
+  }
+  if(!rows){flash("No quarterly header (Q# YYYY) found in this file");return;}
+
+  const quarters=qcols.map(ci=>({label:String(rows[qHead][ci]).replace(/\s+/g," ").trim(),
+    est:/est/i.test(String(rows[qHead][ci])),date:""}));
+  // date row directly below header, if present
+  const dr=rows[qHead+1];
+  if(dr&&qcols.some(ci=>dr[ci] instanceof Date||/\d{1,2}\/\d{1,2}\/\d{2,4}/.test(String(dr[ci]||""))))
+    qcols.forEach((ci,k)=>quarters[k].date=biso(dr[ci]));
+
+  // company / ticker from a title cell
+  let name="",ticker="";
+  for(let i=0;i<qHead;i++){const r=rows[i];if(!r)continue;
+    for(const c of r){const t=String(c||"");const m=t.match(/^(.+?)\s*\(([A-Z0-9.]+)\s+[A-Z]{2}\)/);
+      if(m){name=m[1].trim();ticker=m[2];break;}}
+    if(name)break;}
+
+  const metrics={};let cur=null;
+  for(let i=qHead+1;i<rows.length;i++){
+    const r=rows[i];if(!r)continue;
+    const lab=String(r[0]||"").trim();if(!lab)continue;
+    const vals=qcols.map(ci=>bnum(r[ci]));
+    if(/margin\s*%/i.test(lab)){if(cur)metrics[cur+"Margin"]=vals;continue;}
+    if(/growth\s*%/i.test(lab)){if(cur)metrics[cur+"Growth"]=vals;continue;}
+    const hit=FA_METRICS.find(([k,re])=>re.test(lab));
+    if(hit){cur=hit[0];metrics[cur]=vals;}
+  }
+  faData={name,ticker,quarters,metrics};
+  applyFA();render();
+  flash(quarters.length+" quarters loaded from FA"+(ticker?" — "+ticker:""));
+}
+
+function faActualIdx(){
+  // indices of reported (non-Est) quarters with a revenue figure, oldest→newest
+  return faData.quarters.map((q,i)=>i).filter(i=>!faData.quarters[i].est&&(faData.metrics.revenue||[])[i]!=null);
+}
+function faLTM(key,idx){const m=faData.metrics[key]||[];const last4=idx.slice(-4);
+  if(last4.length<4)return null;let s=0;for(const i of last4){if(m[i]==null)return null;s+=m[i];}return s;}
+
+function applyFA(){
+  if(!faData)return;
+  const set=(k,v,onlyEmpty)=>{const el=document.querySelector(`[data-k="${k}"]`);if(el&&v&&(!onlyEmpty||!el.value.trim()))el.value=v;};
+  if(faData.name)set("issuer",faData.name,true);
+  if(faData.ticker)set("ticker",faData.ticker,true);
+  const M=faData.metrics,idx=faActualIdx();
+  if(!idx.length)return;
+  const last=idx[idx.length-1],lbl=faData.quarters[last].label;
+  const debt=(M.debt||[])[last],cash=(M.cash||[])[last],ev=(M.ev||[])[last],mc=(M.mktCap||[])[last];
+  const ltmEbitda=faLTM("ebitda",idx),ltmFcf=faLTM("fcf",idx),ltmNI=faLTM("netIncome",idx);
+  if(debt!=null&&ltmEbitda){
+    const nd=debt-(cash||0);
+    set("lev",(debt/ltmEbitda).toFixed(1)+"x gross / "+(nd/ltmEbitda).toFixed(1)+"x net (ND $"+bmoney(nd)+"m · LTM EBITDA $"+bmoney(ltmEbitda)+"m)");
+  }
+  if(ltmFcf!=null){const q=(M.fcf||[])[last];set("fcf","LTM $"+bmoney(ltmFcf)+"m"+(q!=null?" · "+lbl+" $"+bmoney(q)+"m":""));}
+  const vparts=[];
+  if(ev!=null&&ltmEbitda)vparts.push("EV/EBITDA "+(ev/ltmEbitda).toFixed(1)+"x");
+  if(mc!=null&&ltmNI)vparts.push("P/E "+(mc/ltmNI).toFixed(1)+"x");
+  if(mc&&ltmFcf!=null)vparts.push("FCF yld "+(ltmFcf/mc*100).toFixed(1)+"%");
+  if(vparts.length)set("eqVal",vparts.join(" · "));
+}
+
+function clearBloomberg(){anrData=null;faData=null;const a=$("#anrFile"),f=$("#faFile");if(a)a.value="";if(f)f.value="";render();flash("Bloomberg data cleared");}
+
+/* ---- preview blocks ---- */
+const FIN_ROWS=[
+  ["revenue","Revenue",bmoney],["revenueGrowth","  YoY %",v=>bpct(v,true)],
+  ["grossProfitMargin","Gross margin %",v=>bpct(v)],
+  ["ebitda","EBITDA",bmoney],["ebitdaMargin","  Margin %",v=>bpct(v)],
+  ["netIncome","Net income",bmoney],["netIncomeMargin","  Margin %",v=>bpct(v)],
+  ["eps","EPS",v=>v==null?"—":v.toFixed(2)],["epsGrowth","  YoY %",v=>bpct(v,true)],
+  ["cfo","CFO",bmoney],["capex","Capex",bmoney],["fcf","FCF",bmoney],["ev","EV",bmoney]];
+
+function finBlock(){
+  if(!faData||!faData.quarters.length)return "";
+  const q=faData.quarters,M=faData.metrics;
+  const start=Math.max(0,q.length-8); // last 8 quarters keep it printable
+  const cols=q.slice(start);
+  const th=cols.map(c=>`<th style="text-align:right${c.est?';color:var(--muted);font-style:italic':''}">${esc(c.label)}</th>`).join("");
+  const netDebt=q.map((_,i)=>{const d=(M.debt||[])[i],c=(M.cash||[])[i];return d==null?null:d-(c||0);});
+  const body=FIN_ROWS.map(([k,l,fmt])=>{
+    const arr=k==="netDebt"?netDebt:(M[k]||[]);
+    if(!arr.some((v,i)=>i>=start&&v!=null))return "";
+    const sub=/^\s/.test(l);
+    return `<tr><td class="k"${sub?' style="padding-left:18px"':''}>${esc(l.trim())}</td>`+
+      cols.map((c,ci)=>`<td style="text-align:right${c.est?';color:var(--muted)':''}">${fmt(arr[start+ci])}</td>`).join("")+`</tr>`;
+  }).join("");
+  // insert Net debt row before EV
+  const ndRow=netDebt.some((v,i)=>i>=start&&v!=null)?`<tr><td class="k">Net debt</td>`+cols.map((c,ci)=>`<td style="text-align:right${c.est?';color:var(--muted)':''}">${bmoney(netDebt[start+ci])}</td>`).join("")+`</tr>`:"";
+  return `<h4>Quarterly financials — Bloomberg${faData.quarters.some(c=>c.est)?' <span class="empty" style="font-style:italic">(Est = estimate)</span>':''}</h4>
+    <table><tr><th>$m unless noted</th>${th}</tr>${body}${ndRow}</table>`;
+}
+
+function anrChartSVG(hist){
+  const h=hist.filter(p=>p.tp!=null||p.last!=null);if(h.length<2)return "";
+  const W=780,H=300,mL=48,mR=58,mT=16,mB=34,n=h.length;
+  const xs=h.map((_,i)=>mL+i*(W-mL-mR)/(n-1));
+  const all=h.flatMap(p=>[p.tp,p.last]).filter(v=>v!=null&&isFinite(v));
+  const ymax=Math.ceil(Math.max(...all)/20)*20,ymin=Math.floor(Math.min(...all)/20)*20;
+  const Y=v=>mT+(H-mT-mB)*(1-(v-ymin)/(ymax-ymin||1));
+  let g=`<style>.gl{stroke:#22252b}.ax{font:9.5px 'IBM Plex Mono',monospace;fill:#8b919c}.tp-l{stroke:#e8a33d}.tp-t{font:9px 'IBM Plex Mono',monospace;fill:#f0b350}.lp-l{stroke:#7d9cc7}.lp-t{font:9px 'IBM Plex Mono',monospace;fill:#7d9cc7}</style>`;
+  for(let t=ymin;t<=ymax;t+=Math.max(20,Math.round((ymax-ymin)/5/20)*20))g+=`<line class="gl" x1="${mL}" x2="${W-mR}" y1="${Y(t)}" y2="${Y(t)}"/><text class="ax" x="${mL-6}" y="${Y(t)+3.5}" text-anchor="end">${t}</text>`;
+  const step=Math.ceil(n/8);
+  h.forEach((p,i)=>{if(i%step===0||i===n-1)g+=`<text class="ax" x="${xs[i]}" y="${H-mB+15}" text-anchor="middle">${p.date.slice(2,7)}</text>`;});
+  const line=(key,cls)=>{const pts=h.map((p,i)=>p[key]!=null?`${xs[i]},${Y(p[key])}`:null).filter(Boolean).join(" ");
+    return `<polyline class="${cls}" points="${pts}" fill="none" stroke-width="1.8"/>`;};
+  g+=line("last","lp-l")+line("tp","tp-l");
+  const lastP=h[n-1];
+  if(lastP.tp!=null)g+=`<text class="tp-t" x="${W-mR+6}" y="${Y(lastP.tp)+3}">TP ${lastP.tp.toFixed(0)}</text>`;
+  if(lastP.last!=null)g+=`<text class="lp-t" x="${W-mR+6}" y="${Y(lastP.last)+3}">Px ${lastP.last.toFixed(0)}</text>`;
+  return `<svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg" style="width:100%;background:var(--panel);border:1px solid var(--line);border-radius:6px">${g}</svg>`;
+}
+
+function anrBlock(){
+  if(!anrData)return "";
+  const s=anrData.sum||{},cur=s.ccy==="USD"?"$":(s.ccy?s.ccy+" ":"");
+  const rows=[
+    ["Consensus target",s.tpMean!=null?cur+s.tpMean.toFixed(1):null],
+    ["Last price",s.lastPrice!=null?cur+s.lastPrice.toFixed(1):null],
+    ["Return potential",s.returnPot!=null?bpct(s.returnPot*100,true):null],
+    ["Consensus rating",s.rating!=null?s.rating.toFixed(2)+" / 5":null],
+    ["Buy / Hold / Sell",(s.totalBuys!=null||s.totalHolds!=null)?`${s.totalBuys||0} / ${s.totalHolds||0} / ${s.totalSells||0}`+(s.buysPct!=null?` (${(s.buysPct*100).toFixed(0)}% buys)`:""):null],
+    ["LTM return",s.ltmReturn!=null?bpct(s.ltmReturn*100,true):null],
+    ["As of",s.asOf||""]
+  ].filter(r=>r[1]);
+  const summary=rows.length?`<table>${rows.map(([k,v])=>`<tr><td class="k">${k}</td><td>${esc(String(v))}</td></tr>`).join("")}</table>`:"";
+  const A=anrData.analysts||[];
+  const atable=A.length?`<table><tr><th>Firm</th><th>Analyst</th><th>Reco</th><th style="text-align:right">Target</th><th style="text-align:right">Date</th></tr>`+
+    A.map(a=>`<tr><td>${esc(a.firm)}</td><td>${dash(a.analyst)}</td><td>${dash(a.reco)}</td><td style="text-align:right">${a.tp!=null?cur+a.tp.toFixed(0):'<span class="empty">n/a</span>'}</td><td style="text-align:right">${dash(a.date)}</td></tr>`).join("")+`</table>`:"";
+  return `<h4>Sell-side consensus — Bloomberg</h4>${summary}${anrChartSVG(anrData.hist||[])}${atable}`;
+}
+
+/* markdown for the Bloomberg corporate blocks */
+function anrMD(){
+  if(!anrData)return "";
+  const s=anrData.sum||{},cur=s.ccy==="USD"?"$":"";
+  let md="\n### 2.4 Sell-side consensus (Bloomberg)\n";
+  if(s.tpMean!=null)md+=`- Consensus target: ${cur}${s.tpMean.toFixed(1)} | Last: ${cur}${(s.lastPrice||0).toFixed(1)} | Upside: ${s.returnPot!=null?bpct(s.returnPot*100,true):"[•]"}\n`;
+  md+=`- Rating: ${s.rating!=null?s.rating.toFixed(2)+"/5":"[•]"} | Buy/Hold/Sell: ${s.totalBuys||0}/${s.totalHolds||0}/${s.totalSells||0}\n\n`;
+  const A=anrData.analysts||[];
+  if(A.length){md+="| Firm | Analyst | Reco | Target | Date |\n|---|---|---|---|---|\n";
+    A.forEach(a=>md+=`| ${a.firm} | ${a.analyst||""} | ${a.reco||""} | ${a.tp!=null?(cur+a.tp.toFixed(0)):"n/a"} | ${a.date||""} |\n`);}
+  return md;
+}
+function finMD(){
+  if(!faData||!faData.quarters.length)return "";
+  const q=faData.quarters,M=faData.metrics,start=Math.max(0,q.length-6),cols=q.slice(start);
+  let md="\n### 2.5 Quarterly financials — Bloomberg ($m)\n";
+  md+="| Metric | "+cols.map(c=>c.label).join(" | ")+" |\n|"+"---|".repeat(cols.length+1)+"\n";
+  FIN_ROWS.forEach(([k,l,fmt])=>{const arr=M[k]||[];if(!arr.some((v,i)=>i>=start&&v!=null))return;
+    md+=`| ${l.trim()} | ${cols.map((c,ci)=>fmt(arr[start+ci])).join(" | ")} |\n`;});
+  return md;
+}
+
+/* file inputs */
+$("#anrFile").addEventListener("change",e=>{const f=e.target.files[0];if(!f)return;const r=new FileReader();
+  r.onload=()=>{try{parseANR(XLSX.read(new Uint8Array(r.result),{type:"array",cellDates:true}));}catch(err){flash("Could not parse this ANR file");}};
+  r.readAsArrayBuffer(f);});
+$("#faFile").addEventListener("change",e=>{const f=e.target.files[0];if(!f)return;const r=new FileReader();
+  r.onload=()=>{try{parseFA(XLSX.read(new Uint8Array(r.result),{type:"array",cellDates:true}));}catch(err){flash("Could not parse this FA file");}};
+  r.readAsArrayBuffer(f);});
+
 /* ---------- markdown export ---------- */
 function toMD(){
   const s=collect(),K=s.k;
@@ -800,8 +1101,9 @@ ${mdv(K.creditView)}
 
 ### 2.3 Equity
 - Valuation: ${mdv(K.eqVal)} | Short interest: ${mdv(K.si)} | Buyback/div: ${mdv(K.bb)}
+- Sell-side consensus: ${mdv(K.sellSide)}
 ${mdv(K.eqStory)}
-
+${anrMD()}${finMD()}
 ## 3. CATALYSTS
 
 | Catalyst | Timing | Direction | Impact on CB |
@@ -856,6 +1158,8 @@ $("#fileIn").addEventListener("change",e=>{
     $("#catrows").innerHTML="";(s.cats||[]).forEach(c=>addCat(c));
     volCone=s.volCone||null;
     pricerCharts=s.pricerCharts||null;
+    anrData=s.anrData||null;
+    faData=s.faData||null;
     render();flash("Draft loaded");
   }catch(err){flash("Invalid draft file");}};
   r.readAsText(f);e.target.value="";
