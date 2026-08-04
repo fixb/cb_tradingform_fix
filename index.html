@@ -82,6 +82,8 @@ input[type=file]::file-selector-button:hover{border-color:var(--amber);color:var
 .doc .rc-rich{color:var(--red);font-weight:600}
 .doc .rc-cheap{color:var(--green);font-weight:600}
 .doc .reco{margin-top:22px;padding:12px 16px;border:1px solid var(--amber);border-radius:6px;font-family:'IBM Plex Mono',monospace;font-size:12.5px}
+.doc .downside{margin:6px 0 14px;padding:6px 14px 12px;border:1px solid var(--red);border-left-width:3px;border-radius:6px;background:rgba(217,123,123,.05)}
+.doc .downside table{margin:8px 0}
 .doc .reco b{color:var(--amber2)}
 
 /* ---------- PRINT ---------- */
@@ -100,6 +102,7 @@ input[type=file]::file-selector-button:hover{border-color:var(--amber);color:var
   .doc h3.page-break{break-before:page;page-break-before:always}
   .doc h3,.doc h4{break-after:avoid;page-break-after:avoid}
   .doc table,.doc .reco{break-inside:avoid;page-break-inside:avoid}
+  .doc .downside{border-color:#c0392b!important;background:#fff!important;break-inside:avoid;page-break-inside:avoid}
   .doc svg{background:#fff!important;border-color:#ddd!important}
   .doc img{border-color:#ddd!important}
   svg .gl{stroke:#e8e8e8!important}
@@ -416,6 +419,7 @@ function render(){
   ${SC_ROWS.map(([k,l])=>`<tr><td class="k">${l}</td>${SC_COLS.map(c=>`<td>${dash(s.sc[k+"-"+c])}</td>`).join("")}</tr>`).join("")}</table>
   <h4>Risk metrics</h4>
   ${kv([["Distance to bond floor",K.distFloor],["Max drawdown (credit stress)",K.maxDD],["Carry (cpn + rebate − borrow − funding)",K.carry],["Realized vol breakeven vs theta",K.volBE]])}
+  ${downsideBlock()}
   <h4>Trade management</h4>
   ${kv([["Entry / limit",K.entry],["Add level",K.add],["Stop / review trigger",K.stop],["Hedge ratio & rebalancing bands",K.hedge],["Exit",K.exit]])}
   <h4>Key risks to thesis</h4>
@@ -473,6 +477,32 @@ $("#coneXlsx").addEventListener("change",e=>{
             date:xlDate(rw[ci.date]),
             dpts:+rw[ci.dpts],
             vol:ci.vol>=0&&rw[ci.vol]!=null?+rw[ci.vol]:null
+          }));
+        }
+      }
+      // Optional "Worst Drops" sheet (worst underlying declines)
+      const wdName=wb.SheetNames.find(n=>/worst ?drops|pires baisses/i.test(n));
+      if(wdName){
+        const wj=XLSX.utils.sheet_to_json(wb.Sheets[wdName],{header:1});
+        const wh=(wj[0]||[]).map(String);
+        const gi={
+          cat:wh.findIndex(h=>/cat[ée]gorie|category|type/i.test(h)),
+          win:wh.findIndex(h=>/fen|window/i.test(h)),
+          rank:wh.findIndex(h=>/rang|rank/i.test(h)),
+          start:wh.findIndex(h=>/d[ée]but|start|pic|^date/i.test(h)),
+          end:wh.findIndex(h=>/fin|end|creux|trough/i.test(h)),
+          drop:wh.findIndex(h=>/baisse|drop|ampleur|%/i.test(h)),
+          detail:wh.findIndex(h=>/d[ée]tail|info/i.test(h))
+        };
+        if(gi.cat>=0&&gi.start>=0&&gi.drop>=0){
+          d.worstDrops=wj.slice(1).filter(rw=>rw&&rw[gi.cat]!=null&&rw[gi.drop]!=null).map(rw=>({
+            cat:String(rw[gi.cat]),
+            win:gi.win>=0?String(rw[gi.win]??""):"",
+            rank:gi.rank>=0&&rw[gi.rank]!=null?+rw[gi.rank]:null,
+            start:xlDate(rw[gi.start]),
+            end:gi.end>=0&&rw[gi.end]!=null?xlDate(rw[gi.end]):"",
+            drop:+rw[gi.drop],
+            detail:gi.detail>=0?String(rw[gi.detail]??""):""
           }));
         }
       }
@@ -558,6 +588,60 @@ function movesTable(d){
     +`<div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">`
     +col(up,"rc-cheap","▲ Rises · vol gained")
     +col(down,"rc-rich","▼ Falls · vol lost")+`</div>`;
+}
+
+/* ---------- worst underlying declines (highlighted downside section) ---------- */
+function downsideData(){
+  const wd=volCone&&volCone.type==="data"?volCone.data.worstDrops:null;
+  if(!wd||!wd.length)return null;
+  const byRank=(re)=>wd.filter(x=>re.test(x.cat)).sort((a,b)=>(a.rank||0)-(b.rank||0));
+  const sess=byRank(/s[ée]ance|session|day/i).slice(0,5);
+  const dd=byRank(/drawdown|pic/i).slice(0,5);
+  const winRows=wd.filter(x=>/fen|window/i.test(x.cat));
+  const wins=[...new Set(winRows.map(x=>x.win))].sort((a,b)=>parseInt(a)-parseInt(b));
+  const w=wins[0];
+  const win=winRows.filter(x=>x.win===w).sort((a,b)=>(a.rank||0)-(b.rank||0)).slice(0,5);
+  if(!sess.length&&!dd.length&&!win.length)return null;
+  return {sess,dd,win,w};
+}
+
+function downsideBlock(){
+  const D=downsideData();
+  if(!D)return "";
+  const dr=v=>`<span class="rc-rich">${v.toFixed(1)}%</span>`;
+  let inner="";
+  if(D.sess.length)inner+=`<table><tr><th colspan="3" style="text-transform:none">Worst sessions · day/day</th></tr>`
+    +`<tr><th>Date</th><th style="text-align:right">Drop</th><th style="text-align:right">Px</th></tr>`
+    +D.sess.map(x=>`<tr><td class="k">${esc(x.start)}</td><td style="text-align:right">${dr(x.drop)}</td>`
+      +`<td style="text-align:right">${esc((x.detail||"").replace(/^px\s*/,""))}</td></tr>`).join("")+`</table>`;
+  if(D.dd.length)inner+=`<table><tr><th colspan="4" style="text-transform:none">Worst drawdowns · peak→trough</th></tr>`
+    +`<tr><th>Peak</th><th>Trough</th><th style="text-align:right">Depth</th><th style="text-align:right">Length</th></tr>`
+    +D.dd.map(x=>`<tr><td class="k">${esc(x.start)}</td><td>${esc(x.end)}</td>`
+      +`<td style="text-align:right">${dr(x.drop)}</td><td style="text-align:right">${esc(x.detail)}</td></tr>`).join("")+`</table>`;
+  if(D.win.length)inner+=`<table><tr><th colspan="3" style="text-transform:none">Worst ${esc(D.w)} windows</th></tr>`
+    +`<tr><th>Start</th><th>End</th><th style="text-align:right">Drop</th></tr>`
+    +D.win.map(x=>`<tr><td class="k">${esc(x.start)}</td><td>${esc(x.end)}</td>`
+      +`<td style="text-align:right">${dr(x.drop)}</td></tr>`).join("")+`</table>`;
+  return `<h4>Historical downside — worst declines</h4><div class="downside">${inner}</div>`;
+}
+
+function downsideMD(){
+  const D=downsideData();
+  if(!D)return "";
+  let md="\n### Historical downside — worst declines\n";
+  if(D.sess.length){
+    md+="\n**Worst sessions (day/day)**\n\n| Date | Drop | Px |\n|---|---|---|\n";
+    D.sess.forEach(x=>md+=`| ${x.start} | ${x.drop.toFixed(1)}% | ${(x.detail||"").replace(/^px\s*/,"")} |\n`);
+  }
+  if(D.dd.length){
+    md+="\n**Worst drawdowns (peak→trough)**\n\n| Peak | Trough | Depth | Length |\n|---|---|---|---|\n";
+    D.dd.forEach(x=>md+=`| ${x.start} | ${x.end} | ${x.drop.toFixed(1)}% | ${x.detail} |\n`);
+  }
+  if(D.win.length){
+    md+=`\n**Worst ${D.w} windows**\n\n| Start | End | Drop |\n|---|---|---|\n`;
+    D.win.forEach(x=>md+=`| ${x.start} | ${x.end} | ${x.drop.toFixed(1)}% |\n`);
+  }
+  return md;
 }
 
 function coneBlock(K){
@@ -1189,7 +1273,7 @@ ${SC_ROWS.map(([k,l])=>scRow(k,l)).join("\n")}
 - Distance to bond floor: ${mdv(K.distFloor)} | Max DD (credit stress): ${mdv(K.maxDD)}
 - Carry: ${mdv(K.carry)}
 - Realized vol breakeven vs theta: ${mdv(K.volBE)}
-
+${downsideMD()}
 ### Trade management
 - Entry: ${mdv(K.entry)} | Add: ${mdv(K.add)} | Stop: ${mdv(K.stop)}
 - Hedge ratio & bands: ${mdv(K.hedge)}
