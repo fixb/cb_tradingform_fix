@@ -1460,9 +1460,16 @@ function copyMD(){
 
 /* ---------- drafts (JSON file, no localStorage) ---------- */
 function saveDraft(){
+  const K=collect().k;
+  const part=s=>sanitizeFilePart(s).replace(/\s+/g,"-");   // spaces → hyphens within a name part
+  const issuer=part(K.issuer)||part(K.ticker);
+  const year=extractMaturityYear(K.maturity);
+  const isin=part(K.isin);
+  const date=new Date().toISOString().slice(0,10);
+  const name=["tradeform",issuer||"draft",year,isin,date].filter(Boolean).join("_");
   const blob=new Blob([JSON.stringify(collect(),null,1)],{type:"application/json"});
   const a=document.createElement("a");a.href=URL.createObjectURL(blob);
-  a.download=`tradeform_${(collect().k.ticker||"draft").split(" ")[0]}_${new Date().toISOString().slice(0,10)}.json`;
+  a.download=name+".json";
   a.click();URL.revokeObjectURL(a.href);
 }
 function loadDraft(){$("#fileIn").click();}
