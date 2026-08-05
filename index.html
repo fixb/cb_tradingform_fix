@@ -229,6 +229,7 @@ input[type=file]::file-selector-button:hover{border-color:var(--amber);color:var
   <div class="grid2">
     <div class="field"><label>Sell-side target prices (ANR export · xlsx/xlsm)</label><input type="file" id="anrFile" accept=".xlsx,.xlsm,.xls"></div>
     <div class="field"><label>Quarterly financials (FA export · xlsx)</label><input type="file" id="faFile" accept=".xlsx,.xlsm,.xls"></div>
+    <div class="field"><label>Capital structure — bond grid (FIW export · xlsx)</label><input type="file" id="capFile" accept=".xlsx,.xlsm,.xls"></div>
   </div>
   <div class="field"><label>&nbsp;</label><button onclick="clearBloomberg()">Clear Bloomberg data</button></div>
   <div class="field"><label>2.1 Business — model, segments, cycle position</label><textarea data-k="business"></textarea></div>
@@ -360,6 +361,7 @@ function collect(){
   s.pricerCharts=pricerCharts;
   s.anrData=anrData;
   s.faData=faData;
+  s.capData=capData;
   return s;
 }
 
@@ -405,6 +407,7 @@ function render(){
   <h4>Credit</h4>
   ${kv([["Leverage gross / net",K.lev],["FCF",K.fcf],["Liquidity",K.liq],["Ratings / outlook",K.ratings],["Refi wall",K.refi],["CB rank in cap structure",K.rank]])}
   ${para(K.creditView)}
+  ${capStructBlock()}
   <h4>Equity</h4>
   ${kv([["Valuation",K.eqVal],["Short interest",K.si],["Buyback / dividend",K.bb],["Sell-side consensus",K.sellSide]])}
   ${para(K.eqStory)}
@@ -1167,7 +1170,96 @@ function applyFA(){
   if(vparts.length)set("eqVal",vparts.join(" · "));
 }
 
-function clearBloomberg(){anrData=null;faData=null;const a=$("#anrFile"),f=$("#faFile");if(a)a.value="";if(f)f.value="";render();flash("Bloomberg data cleared");}
+function clearBloomberg(){anrData=null;faData=null;capData=null;const a=$("#anrFile"),f=$("#faFile"),c=$("#capFile");if(a)a.value="";if(f)f.value="";if(c)c.value="";render();flash("Bloomberg data cleared");}
+
+/* ---- Capital structure : bond grid (FIW export) ---- */
+let capData=null;
+function capNum(v){
+  if(typeof v==="number")return isFinite(v)?v:null;
+  if(v==null)return null;
+  const t=String(v).replace(/[, ]/g,"");
+  if(/n\/?a|#n\/a|--|—/i.test(t))return null;
+  const n=parseFloat(t.replace(/[^0-9.\-]/g,""));
+  return isFinite(n)?n:null;
+}
+function capRating(v){
+  const t=String(v==null?"":v).trim();
+  if(!t||/^n\.?a\.?$|#n\/a/i.test(t))return null;
+  return t;
+}
+function parseCap(wb){
+  let rows=null,H=null,hi=-1;
+  for(const s of sheetRows(wb)){
+    const j=s.rows.findIndex(r=>r&&r.some(c=>/security id/i.test(String(c)))&&r.some(c=>/z-?sprd|z-?spread/i.test(String(c))));
+    if(j>=0){rows=s.rows;H=s.rows[j].map(String);hi=j;break;}
+  }
+  if(!rows){flash("No FIW grid header found (needs Security ID + Z-Sprd columns)");return;}
+  const col=re=>H.findIndex(h=>re.test(h));
+  const ix={
+    id:col(/security id/i),
+    name:col(/^security$/i),
+    coupon:col(/^coupon/i),
+    matDate:col(/maturity date/i),
+    mat:H.findIndex(h=>/^maturity$/i.test(h)),   // years to maturity (not "Maturity Date")
+    price:col(/^price/i),
+    z:col(/z-?sprd|z-?spread/i),
+    yield:col(/^yield/i),
+    sp:col(/s&?p rating/i),
+    rank:col(/pmt rank|payment rank|^rank$/i),
+    src:col(/^src$|^source$/i)
+  };
+  const seen=new Set(),out=[];
+  for(let i=hi+1;i<rows.length;i++){
+    const r=rows[i];if(!r)continue;
+    if(ix.id<0||!String(r[ix.id]||"").trim())continue;          // skip aggregate/group rows (blank Security ID)
+    const name=String((ix.name>=0?r[ix.name]:"")||"").trim();
+    const mat=ix.mat>=0?capNum(r[ix.mat]):null;
+    const key=name||`${r[ix.coupon]}|${r[ix.matDate]}`;          // dedupe 144A/REGS/AI series
+    if(seen.has(key))continue;seen.add(key);
+    out.push({
+      name:name||"—",
+      coupon:ix.coupon>=0?capNum(r[ix.coupon]):null,
+      matDate:ix.matDate>=0?xlDate(r[ix.matDate]):"",
+      mat,
+      price:ix.price>=0?capNum(r[ix.price]):null,
+      z:ix.z>=0?capNum(r[ix.z]):null,
+      yield:ix.yield>=0?capNum(r[ix.yield]):null,
+      sp:ix.sp>=0?capRating(r[ix.sp]):null,
+      rank:ix.rank>=0?String((r[ix.rank]||"")).trim():"",
+      src:ix.src>=0?String((r[ix.src]||"")).trim():""
+    });
+  }
+  out.sort((a,b)=>(a.mat==null?1e9:a.mat)-(b.mat==null?1e9:b.mat));  // by increasing duration
+  capData=out;
+  render();
+  flash(out.length+" instruments loaded from FIW grid");
+}
+function capStructBlock(){
+  if(!capData||!capData.length)return "";
+  const fmt=(v,d,suf)=>v==null?'<span class="empty">—</span>':v.toFixed(d)+(suf||"");
+  const body=capData.map(b=>`<tr>
+    <td>${esc(b.name)}</td>
+    <td>${b.rank?esc(b.rank):'<span class="empty">—</span>'}</td>
+    <td style="text-align:right">${fmt(b.mat,1,"y")}</td>
+    <td style="text-align:right">${fmt(b.price,2)}</td>
+    <td style="text-align:right">${fmt(b.z,0)}</td>
+    <td style="text-align:right">${fmt(b.yield,2)}</td>
+    <td style="text-align:center">${b.sp?esc(b.sp):'<span class="empty">NR</span>'}</td>
+  </tr>`).join("");
+  return `<h4>Capital structure — other instruments <span class="empty" style="font-style:italic">(by increasing maturity)</span></h4>
+    <table><tr><th>Instrument</th><th>Rank</th><th style="text-align:right">Mat.</th><th style="text-align:right">Price</th><th style="text-align:right">Z-sprd (bp)</th><th style="text-align:right">Yield %</th><th style="text-align:center">S&amp;P</th></tr>${body}</table>`;
+}
+function capStructMD(){
+  if(!capData||!capData.length)return "";
+  const f=(v,d,suf)=>v==null?"—":v.toFixed(d)+(suf||"");
+  const rows=capData.map(b=>`| ${b.name} | ${b.rank||"—"} | ${f(b.mat,1,"y")} | ${f(b.price,2)} | ${f(b.z,0)} | ${f(b.yield,2)} | ${b.sp||"NR"} |`).join("\n");
+  return `
+### 2.2b Capital structure — other instruments (by increasing maturity)
+| Instrument | Rank | Mat. | Price | Z-sprd (bp) | Yield % | S&P |
+|---|---|---:|---:|---:|---:|:-:|
+${rows}
+`;
+}
 
 /* ---- preview blocks ---- */
 const FIN_ROWS=[
@@ -1266,6 +1358,9 @@ $("#anrFile").addEventListener("change",e=>{const f=e.target.files[0];if(!f)retu
 $("#faFile").addEventListener("change",e=>{const f=e.target.files[0];if(!f)return;const r=new FileReader();
   r.onload=()=>{try{parseFA(XLSX.read(new Uint8Array(r.result),{type:"array",cellDates:true}));}catch(err){flash("Could not parse this FA file");}};
   r.readAsArrayBuffer(f);});
+$("#capFile").addEventListener("change",e=>{const f=e.target.files[0];if(!f)return;const r=new FileReader();
+  r.onload=()=>{try{parseCap(XLSX.read(new Uint8Array(r.result),{type:"array",cellDates:true}));}catch(err){flash("Could not parse this FIW grid file");}};
+  r.readAsArrayBuffer(f);});
 
 /* ---------- markdown export ---------- */
 function toMD(){
@@ -1319,7 +1414,7 @@ ${mdv(K.business)}
 - Leverage gross/net: ${mdv(K.lev)} | FCF: ${mdv(K.fcf)} | Liquidity: ${mdv(K.liq)}
 - Ratings: ${mdv(K.ratings)} | Refi wall: ${mdv(K.refi)} | CB rank: ${mdv(K.rank)}
 ${mdv(K.creditView)}
-
+${capStructMD()}
 ### 2.3 Equity
 - Valuation: ${mdv(K.eqVal)} | Short interest: ${mdv(K.si)} | Buyback/div: ${mdv(K.bb)}
 - Sell-side consensus: ${mdv(K.sellSide)}
@@ -1381,6 +1476,7 @@ $("#fileIn").addEventListener("change",e=>{
     pricerCharts=s.pricerCharts||null;
     anrData=s.anrData||null;
     faData=s.faData||null;
+    capData=s.capData||null;
     render();flash("Draft loaded");
   }catch(err){flash("Invalid draft file");}};
   r.readAsText(f);e.target.value="";
