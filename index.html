@@ -183,6 +183,7 @@ input[type=file]::file-selector-button:hover{border-color:var(--amber);color:var
   </div>
   <div class="subhead">1.2 Valuation & Greeks</div>
   <div class="grid3">
+    <div class="field"><label>Underlying / stock px (ref)</label><input type="text" data-k="stock" placeholder="e.g. 68.30 — auto from cb_pricer"></div>
     <div class="field"><label>Price</label><input type="text" data-k="px"></div>
     <div class="field"><label>Parity</label><input type="text" data-k="parity"></div>
     <div class="field"><label>Conv premium</label><input type="text" data-k="convPrem"></div>
@@ -391,6 +392,7 @@ function render(){
   </div>
 
   <h3>1 · Convertible analysis — structure & prospects</h3>
+  ${K.stock&&K.stock.trim()?`<p style="font-family:'IBM Plex Mono',monospace;font-size:12px;margin:2px 0 10px"><span style="color:var(--muted)">Underlying reference · stock px</span> &nbsp;<b style="color:var(--amber)">${esc(K.stock)}</b></p>`:""}
   <h4>Terms</h4>
   ${kv([["Issue size / outstanding",K.issueSize],["Coupon / frequency",K.coupon],["Maturity / avg life",K.maturity],["Conversion price / ratio",K.convPrice],["Premium at issue",K.premIssue],["Soft call",K.softCall],["Investor put",K.put],["Dividend protection",K.divProt],["Takeover protection",K.coc],["Settlement",K.settle]])}
   <h4>Valuation & Greeks</h4>
@@ -880,6 +882,7 @@ function applyPricer(j){
   if(inp.conversionPrice)set("convPrice",f(inp.conversionPrice,2)+" / "+f(inp.conversionRatio,4));
   if(inp.callable)set("softCall",f(inp.callPrice,0)+"% trigger"+(inp.callDate_years?", from ~"+addY(base,inp.callDate_years):""));
   const cb=an.cb!=null?an.cb:ref.cb, floor=an.bondFloor!=null?an.bondFloor:ref.bondFloor;
+  if(inp.stock!=null)set("stock",f(inp.stock,2));
   set("px",f(cb,2));set("parity",f(an.parity!=null?an.parity:ref.parity,1));
   if(an.premium_pct!=null)set("convPrem",f(an.premium_pct,1)+"%");
   set("floor",f(floor,1));
@@ -1377,7 +1380,7 @@ function toMD(){
 ---
 
 ## 1. CONVERTIBLE ANALYSIS — Structure & Prospects
-
+${K.stock&&K.stock.trim()?`\n_Underlying reference · stock px **${K.stock.trim()}**_\n`:""}
 ### 1.1 Terms
 | Item | Detail |
 |---|---|
