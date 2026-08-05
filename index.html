@@ -86,9 +86,16 @@ input[type=file]::file-selector-button:hover{border-color:var(--amber);color:var
 .doc .downside table{margin:8px 0}
 .doc .spotvol{margin:6px 0 14px;padding:6px 14px 10px;border:1px solid var(--line);border-left:3px solid var(--amber);border-radius:6px;background:rgba(232,163,61,.04)}
 .doc .reco b{color:var(--amber2)}
+.doc .feat{display:inline-block;font-family:'IBM Plex Sans',sans-serif;font-size:8.5px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;padding:1px 6px;border-radius:8px;border:1px solid var(--line);color:var(--muted);vertical-align:middle;white-space:nowrap}
+.doc .feat-ok{color:var(--green);border-color:var(--green)}
+.field label .vchk{float:right;font-weight:400;font-size:9.5px;color:var(--muted);text-transform:none;letter-spacing:0;cursor:pointer;display:inline-flex;align-items:center;gap:3px}
+.field label .vchk input{margin:0;accent-color:var(--green);cursor:pointer}
 
 /* ---------- PRINT ---------- */
 @media print{
+  .doc tr.row-empty{display:none}
+  .doc .feat{border-color:#bbb;color:#666}
+  .doc .feat-ok{color:#2f8f5b!important;border-color:#2f8f5b!important;-webkit-print-color-adjust:exact;print-color-adjust:exact}
   body{background:#fff;color:#111}
   header.app,.formpane{display:none}
   .layout{display:block;height:auto}
@@ -175,10 +182,10 @@ input[type=file]::file-selector-button:hover{border-color:var(--amber);color:var
     <div class="field"><label>Maturity / avg life</label><input type="text" data-k="maturity"></div>
     <div class="field"><label>Conversion price / ratio</label><input type="text" data-k="convPrice"></div>
     <div class="field"><label>Premium at issue</label><input type="text" data-k="premIssue"></div>
-    <div class="field"><label>Soft call</label><input type="text" data-k="softCall" placeholder="130% from Jun-27"></div>
-    <div class="field"><label>Investor put</label><input type="text" data-k="put"></div>
-    <div class="field"><label>Dividend protection</label><input type="text" data-k="divProt"></div>
-    <div class="field"><label>Takeover protection</label><input type="text" data-k="coc" placeholder="CoC put par + ratchet"></div>
+    <div class="field"><label>Soft call <span class="vchk"><input type="checkbox" data-chk="softCall">verified</span></label><input type="text" data-k="softCall" placeholder="130% from Jun-27"></div>
+    <div class="field"><label>Investor put <span class="vchk"><input type="checkbox" data-chk="put">verified</span></label><input type="text" data-k="put"></div>
+    <div class="field"><label>Dividend protection <span class="vchk"><input type="checkbox" data-chk="divProt">verified</span></label><input type="text" data-k="divProt"></div>
+    <div class="field"><label>Takeover protection <span class="vchk"><input type="checkbox" data-chk="coc">verified</span></label><input type="text" data-k="coc" placeholder="CoC put par + ratchet"></div>
     <div class="field"><label>Settlement</label><input type="text" data-k="settle"></div>
   </div>
   <div class="subhead">1.2 Valuation & Greeks</div>
@@ -353,9 +360,10 @@ function printForm(){
 }
 
 function collect(){
-  const s={k:{},sc:{},tt:[],cats:[]};
+  const s={k:{},sc:{},tt:[],cats:[],chk:{}};
   $$("[data-k]").forEach(el=>s.k[el.dataset.k]=el.value);
   $$("[data-sc]").forEach(el=>s.sc[el.dataset.sc]=el.value);
+  $$("[data-chk]").forEach(el=>s.chk[el.dataset.chk]=el.checked);
   $$("[data-tt]:checked").forEach(el=>s.tt.push(el.dataset.tt));
   $$(".catrow").forEach(r=>s.cats.push({name:r.querySelector(".c-name").value,time:r.querySelector(".c-time").value,dir:r.querySelector(".c-dir").value,imp:r.querySelector(".c-imp").value}));
   s.volCone=volCone;
@@ -367,7 +375,13 @@ function collect(){
 }
 
 /* ---------- preview render ---------- */
-function kv(rows){return `<table>${rows.map(([k,v,raw])=>`<tr><td class="k">${k}</td><td>${raw?v:dash(v)}</td></tr>`).join("")}</table>`;}
+function kv(rows){return `<table>${rows.map(([k,v,raw])=>{const cell=raw?v:dash(v);const empty=/class="empty"/.test(cell);return `<tr${empty?' class="row-empty"':''}><td class="k">${k}</td><td>${cell}</td></tr>`;}).join("")}</table>`;}
+// Structural CB clauses shown as a verify checklist: grey "standard feature",
+// green "✓ verified" once the analyst ticks the box. Empty & unverified → row
+// hidden in the PDF (like any other empty row).
+function featTag(ok){return ok?'<span class="feat feat-ok">✓ verified</span>':'<span class="feat">standard</span>';}
+function clauseVal(text,checked){const t=(text||"").trim();if(!t&&!checked)return '<span class="empty">—</span>';return (t?esc(t)+" ":"")+featTag(checked);}
+function clauseMD(text,ok){const v=(text||"").trim();if(!v&&!ok)return "[•]";return (v||"—")+(ok?" ✓ verified":" (standard)");}
 function rcCell(v){
   if(!v||!v.trim())return '<span class="empty">—</span>';
   const t=v.trim();let cls="";
@@ -394,7 +408,7 @@ function render(){
   <h3>1 · Convertible analysis — structure & prospects</h3>
   ${K.stock&&K.stock.trim()?`<p style="font-family:'IBM Plex Mono',monospace;font-size:12px;margin:2px 0 10px"><span style="color:var(--muted)">Underlying reference · stock px</span> &nbsp;<b style="color:var(--amber)">${esc(K.stock)}</b></p>`:""}
   <h4>Terms</h4>
-  ${kv([["Issue size / outstanding",K.issueSize],["Coupon / frequency",K.coupon],["Maturity / avg life",K.maturity],["Conversion price / ratio",K.convPrice],["Premium at issue",K.premIssue],["Soft call",K.softCall],["Investor put",K.put],["Dividend protection",K.divProt],["Takeover protection",K.coc],["Settlement",K.settle]])}
+  ${kv([["Issue size / outstanding",K.issueSize],["Coupon / frequency",K.coupon],["Maturity / avg life",K.maturity],["Conversion price / ratio",K.convPrice],["Premium at issue",K.premIssue],["Soft call",clauseVal(K.softCall,s.chk.softCall),true],["Investor put",clauseVal(K.put,s.chk.put),true],["Dividend protection",clauseVal(K.divProt,s.chk.divProt),true],["Takeover protection",clauseVal(K.coc,s.chk.coc),true],["Settlement",K.settle]])}
   <h4>Valuation & Greeks</h4>
   ${kv([["Price / parity / conv premium",[K.px,K.parity,K.convPrem].filter(x=>x&&x.trim()).join(" / ")],["Bond floor / inv premium / YTM-YTP",[K.floor,K.invPrem,K.ytm].filter(x=>x&&x.trim()).join(" / ")],["Delta / gamma / vega / theta",[K.delta,K.gamma,K.vega,K.theta].filter(x=>x&&x.trim()).join(" / ")],["Implied vs realized/listed vol",[K.ivol,K.rvol].filter(x=>x&&x.trim()).join(" vs ")],["Credit assumption",K.spread],["Rich (+) / cheap (−) vs fair value",rcCell(K.richCheap),true]])}
   ${priceCompare(K)}
@@ -1389,10 +1403,10 @@ ${K.stock&&K.stock.trim()?`\n_Underlying reference · stock px **${K.stock.trim(
 | Maturity / avg life | ${mdv(K.maturity)} |
 | Conversion price / ratio | ${mdv(K.convPrice)} |
 | Premium at issue | ${mdv(K.premIssue)} |
-| Soft call | ${mdv(K.softCall)} |
-| Investor put | ${mdv(K.put)} |
-| Dividend protection | ${mdv(K.divProt)} |
-| Takeover protection | ${mdv(K.coc)} |
+| Soft call | ${clauseMD(K.softCall,s.chk.softCall)} |
+| Investor put | ${clauseMD(K.put,s.chk.put)} |
+| Dividend protection | ${clauseMD(K.divProt,s.chk.divProt)} |
+| Takeover protection | ${clauseMD(K.coc,s.chk.coc)} |
 | Settlement | ${mdv(K.settle)} |
 
 ### 1.2 Valuation & Greeks
@@ -1481,6 +1495,7 @@ $("#fileIn").addEventListener("change",e=>{
     Object.entries(s.k||{}).forEach(([k,v])=>{const el=document.querySelector(`[data-k="${k}"]`);if(el)el.value=v;});
     Object.entries(s.sc||{}).forEach(([k,v])=>{const el=document.querySelector(`[data-sc="${k}"]`);if(el)el.value=v;});
     $$("[data-tt]").forEach(el=>el.checked=(s.tt||[]).includes(el.dataset.tt));
+    $$("[data-chk]").forEach(el=>el.checked=!!(s.chk||{})[el.dataset.chk]);
     $("#catrows").innerHTML="";(s.cats||[]).forEach(c=>addCat(c));
     volCone=s.volCone||null;
     pricerCharts=s.pricerCharts||null;
